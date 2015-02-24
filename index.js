@@ -15,6 +15,10 @@ module.exports = function (session) {
     this.conString = options.conString || process.env.DATABASE_URL;
     this.ttl =  options.ttl;
     this.pg = options.pg || require('pg');
+    this.shouldPerformCleanup = options.checkExpiry || function (action) {
+      if (action !== 'get') { return false; }
+      return Math.random() < 0.05;
+    };
   };
 
   /**
@@ -69,9 +73,9 @@ module.exports = function (session) {
    */
 
   PGStore.prototype.get = function (sid, fn) {
-    // Clean up occasionly – but not always...
-    if (Math.random() < 0.05) {
-      this.query('DELETE FROM ' + this.quotedTable() + ' WHERE expire < NOW()');
+    // Check if cleanup should be performed
+    if (this.shouldPerformCleanup('get')) {
+      this.cleanup();
     }
     this.query('SELECT sess FROM ' + this.quotedTable() + ' WHERE sid = $1 AND expire >= NOW()', [sid], function (err, data) {
       if (err) return fn(err);
@@ -98,6 +102,11 @@ module.exports = function (session) {
       , maxAge = sess.cookie.maxAge
       , ttl = this.ttl;
 
+    // Check if cleanup should be performed
+    if (this.shouldPerformCleanup('set')) {
+      this.cleanup();
+    }
+
     ttl = ttl || ('number' == typeof maxAge
         ? maxAge / 1000 | 0
         : oneDay);
@@ -112,6 +121,14 @@ module.exports = function (session) {
         fn && fn.apply(this, err);
       }
     });
+  };
+
+  /**
+   * Purge expired sessions
+   * @access public
+   */
+  PGStore.prototype.cleanup = function() {
+    this.query('DELETE FROM ' + this.quotedTable() + ' WHERE expire < NOW()');
   };
 
   /**
